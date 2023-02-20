@@ -1,6 +1,7 @@
 package com.williambl.craftttp;
 
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
+import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
@@ -34,78 +35,40 @@ public class CraftTTP implements ModInitializer {
             try {
                 var httpServer = HttpServer.create(new InetSocketAddress(8394), 0);
                 httpServer.createContext("/get_block", httpExchange -> {
-                    if (!httpExchange.getRequestMethod().equals("GET")) {
-                        httpExchange.sendResponseHeaders(405, -1);
-                        httpExchange.getResponseBody().close();
+                    if (!verifyHttpMethod(httpExchange, "GET")) {
                         return;
                     }
 
-                    Map<String, String> queryParams = getQueryParams(httpExchange.getRequestURI().getRawQuery());
-                    if (!queryParams.containsKey("x") || !queryParams.containsKey("y") || !queryParams.containsKey("z")) {
-                        httpExchange.sendResponseHeaders(400, -1);
-                        httpExchange.getResponseBody().close();
-                        return;
-                    }
-                    int x, y, z;
-                    try {
-                        x = Integer.parseInt(queryParams.get("x"));
-                        y = Integer.parseInt(queryParams.get("y"));
-                        z = Integer.parseInt(queryParams.get("z"));
-                    } catch (NumberFormatException e) {
-                        httpExchange.sendResponseHeaders(400, -1);
-                        httpExchange.getResponseBody().close();
+                    @Nullable BlockPos pos = getBlockPosFromQueryString(httpExchange);
+                    if (pos == null) {
                         return;
                     }
 
-                    var state = server.submit(() -> server.overworld().getBlockState(new BlockPos(x, y, z))).join();
-
-                    String response = BlockStateParser.serialize(state);
-                    httpExchange.sendResponseHeaders(200, response.length());
-                    try (var os = httpExchange.getResponseBody()) {
-                        os.write(response.getBytes());
-                    }
+                    var state = server.submit(() -> server.overworld().getBlockState(pos)).join();
+                    respondOk(httpExchange, BlockStateParser.serialize(state));
                 });
                 httpServer.createContext("/set_block", httpExchange -> {
-                    if (!httpExchange.getRequestMethod().equals("PUT")) {
-                        httpExchange.sendResponseHeaders(405, -1);
-                        httpExchange.getResponseBody().close();
+                    if (!verifyHttpMethod(httpExchange, "PUT")) {
                         return;
                     }
 
-                    Map<String, String> queryParams = getQueryParams(httpExchange.getRequestURI().getRawQuery());
-                    if (!queryParams.containsKey("x") || !queryParams.containsKey("y") || !queryParams.containsKey("z")) {
-                        httpExchange.sendResponseHeaders(400, -1);
-                        httpExchange.getResponseBody().close();
-                        return;
-                    }
-                    int x, y, z;
-                    try {
-                        x = Integer.parseInt(queryParams.get("x"));
-                        y = Integer.parseInt(queryParams.get("y"));
-                        z = Integer.parseInt(queryParams.get("z"));
-                    } catch (NumberFormatException e) {
-                        httpExchange.sendResponseHeaders(400, -1);
-                        httpExchange.getResponseBody().close();
+                    @Nullable BlockPos pos = getBlockPosFromQueryString(httpExchange);
+                    if (pos == null) {
                         return;
                     }
 
-                    BlockStateParser.BlockResult state;
+                    BlockState state;
                     try (var is = new BufferedReader(new InputStreamReader(httpExchange.getRequestBody()))) {
                         String stateStr = is.readLine();
-                        state = BlockStateParser.parseForBlock(server.overworld().holderLookup(Registries.BLOCK), stateStr, true);
+                        state = BlockStateParser.parseForBlock(server.overworld().holderLookup(Registries.BLOCK), stateStr, false).blockState();
                     } catch (CommandSyntaxException e) {
                         httpExchange.sendResponseHeaders(400, -1);
                         httpExchange.getResponseBody().close();
                         return;
                     }
 
-                    server.execute(() -> server.overworld().setBlockAndUpdate(new BlockPos(x, y, z), state.blockState()));
-
-                    String response = state.toString();
-                    httpExchange.sendResponseHeaders(200, response.length());
-                    try (var os = httpExchange.getResponseBody()) {
-                        os.write(response.getBytes());
-                    }
+                    server.execute(() -> server.overworld().setBlockAndUpdate(pos, state));
+                    respondOk(httpExchange, BlockStateParser.serialize(state));
                 });
                 httpServer.setExecutor(null);
                 httpServer.start();
@@ -134,5 +97,44 @@ public class CraftTTP implements ModInitializer {
                 .filter(s -> s.contains("="))
                 .map(kv -> kv.split("=", 2))
                 .collect(Collectors.toMap(x -> URLDecoder.decode(x[0], StandardCharsets.UTF_8), x -> URLDecoder.decode(x[1], StandardCharsets.UTF_8)));
+    }
+
+    private static boolean verifyHttpMethod(HttpExchange httpExchange, String acceptedMethod) throws IOException {
+        if (!httpExchange.getRequestMethod().equals(acceptedMethod)) {
+            httpExchange.sendResponseHeaders(405, -1);
+            httpExchange.getResponseBody().close();
+            return false;
+        }
+
+        return true;
+    }
+
+    private static @Nullable BlockPos getBlockPosFromQueryString(HttpExchange httpExchange) throws IOException {
+        Map<String, String> queryParams = getQueryParams(httpExchange.getRequestURI().getRawQuery());
+        if (!queryParams.containsKey("x") || !queryParams.containsKey("y") || !queryParams.containsKey("z")) {
+            httpExchange.sendResponseHeaders(400, -1);
+            httpExchange.getResponseBody().close();
+            return null;
+        }
+
+        int x, y, z;
+        try {
+            x = Integer.parseInt(queryParams.get("x"));
+            y = Integer.parseInt(queryParams.get("y"));
+            z = Integer.parseInt(queryParams.get("z"));
+        } catch (NumberFormatException e) {
+            httpExchange.sendResponseHeaders(400, -1);
+            httpExchange.getResponseBody().close();
+            return null;
+        }
+
+        return new BlockPos(x, y, z);
+    }
+
+    private static void respondOk(HttpExchange httpExchange, String response) throws IOException {
+        httpExchange.sendResponseHeaders(200, response.length());
+        try (var os = httpExchange.getResponseBody()) {
+            os.write(response.getBytes());
+        }
     }
 }
