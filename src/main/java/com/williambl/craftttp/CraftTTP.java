@@ -164,9 +164,9 @@ public class CraftTTP implements ModInitializer {
                     byte[] contents;
                     try (var is = new BufferedReader(new InputStreamReader(httpExchange.getRequestBody()))) {
                         String contentsStr = is.readLine();
-                        if (contentsStr.isEmpty()) {
-                            httpExchange.sendResponseHeaders(400, -1);
-                            httpExchange.getResponseBody().close();
+                        if (contentsStr == null || contentsStr.isEmpty()) {
+                            respondOk(httpExchange, "Complete");
+                            LOGGER.warn("Request to write no data @ {} offset {}", pos, offset);
                             return;
                         }
                         contents = Base64.getDecoder().decode(contentsStr);
