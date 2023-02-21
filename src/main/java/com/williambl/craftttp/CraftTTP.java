@@ -43,6 +43,7 @@ import java.io.InputStreamReader;
 import java.net.InetSocketAddress;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 import java.util.Map;
 import java.util.WeakHashMap;
 import java.util.stream.Collectors;
@@ -64,7 +65,8 @@ public class CraftTTP implements ModInitializer {
                         return;
                     }
 
-                    @Nullable BlockPos pos = getBlockPosFromQueryString(httpExchange);
+                    Map<String, String> queryParams = getQueryParams(httpExchange.getRequestURI().getRawQuery());
+                    @Nullable BlockPos pos = getBlockPosFromQueryString(httpExchange, queryParams);
                     if (pos == null) {
                         return;
                     }
@@ -77,7 +79,8 @@ public class CraftTTP implements ModInitializer {
                         return;
                     }
 
-                    @Nullable BlockPos pos = getBlockPosFromQueryString(httpExchange);
+                    Map<String, String> queryParams = getQueryParams(httpExchange.getRequestURI().getRawQuery());
+                    @Nullable BlockPos pos = getBlockPosFromQueryString(httpExchange, queryParams);
                     if (pos == null) {
                         return;
                     }
@@ -94,6 +97,64 @@ public class CraftTTP implements ModInitializer {
 
                     server.execute(() -> server.overworld().setBlockAndUpdate(pos, state));
                     respondOk(httpExchange, BlockStateParser.serialize(state));
+                });
+                httpServer.createContext("/read_chunk", httpExchange -> {
+                    if (!verifyHttpMethod(httpExchange, "GET")) {
+                        return;
+                    }
+
+                    Map<String, String> queryParams = getQueryParams(httpExchange.getRequestURI().getRawQuery());
+                    @Nullable ChunkPos pos = getChunkPosFromQueryString(httpExchange, queryParams);
+                    if (pos == null) {
+                        return;
+                    }
+
+                    @Nullable Integer offset = getIntegerFromQueryString(httpExchange, queryParams, "offset", 0);
+                    if (offset == null) {
+                        return;
+                    }
+
+                    int maxLengthForChunk = server.submit(() -> server.overworld().getMaxBuildHeight() - server.overworld().getMinBuildHeight() - 1).join() * 8;
+                    @Nullable Integer length = getIntegerFromQueryString(httpExchange, queryParams, "length", maxLengthForChunk-offset);
+                    if (length == null) {
+                        return;
+                    }
+                    if (length > maxLengthForChunk) {
+                        httpExchange.sendResponseHeaders(400, -1);
+                        httpExchange.getResponseBody().close();
+                    }
+
+                    byte[] chunkContents = server.submit(() -> readChunk(server.overworld(), pos, offset, length)).join();
+                    respondOk(httpExchange, Base64.getEncoder().encodeToString(chunkContents));
+                });
+                httpServer.createContext("/write_chunk", httpExchange -> {
+                    if (!verifyHttpMethod(httpExchange, "PUT")) {
+                        return;
+                    }
+
+                    Map<String, String> queryParams = getQueryParams(httpExchange.getRequestURI().getRawQuery());
+                    @Nullable ChunkPos pos = getChunkPosFromQueryString(httpExchange, queryParams);
+                    if (pos == null) {
+                        return;
+                    }
+                    @Nullable Integer offset = getIntegerFromQueryString(httpExchange, queryParams, "offset", 0);
+                    if (offset == null) {
+                        return;
+                    }
+
+                    byte[] contents;
+                    try (var is = new BufferedReader(new InputStreamReader(httpExchange.getRequestBody()))) {
+                        String contentsStr = is.readLine();
+                        if (contentsStr.isEmpty()) {
+                            httpExchange.sendResponseHeaders(400, -1);
+                            httpExchange.getResponseBody().close();
+                            return;
+                        }
+                        contents = Base64.getDecoder().decode(contentsStr);
+                    }
+
+                    server.execute(() -> writeChunk(server.overworld(), pos, offset, contents));
+                    respondOk(httpExchange, "Complete");
                 });
                 httpServer.setExecutor(null);
                 httpServer.start();
@@ -190,7 +251,8 @@ public class CraftTTP implements ModInitializer {
             dispatcher.register(
                     literal("decode_chunk").then(argument("length", IntegerArgumentType.integer(1)).executes(ctx -> {
                         int length = IntegerArgumentType.getInteger(ctx, "length");
-                        byte[] result = readChunk(ctx.getSource().getLevel(), new ChunkPos(new BlockPos(ctx.getSource().getPosition())));
+                        ServerLevel level = ctx.getSource().getLevel();
+                        byte[] result = readChunk(level, new ChunkPos(new BlockPos(ctx.getSource().getPosition())), 0, length);
                         String resultString = new String(result, 0, length, StandardCharsets.UTF_8);
                         ctx.getSource().sendSuccess(Component.literal(resultString), false);
                         return Command.SINGLE_SUCCESS;
@@ -220,8 +282,7 @@ public class CraftTTP implements ModInitializer {
         return true;
     }
 
-    private static @Nullable BlockPos getBlockPosFromQueryString(HttpExchange httpExchange) throws IOException {
-        Map<String, String> queryParams = getQueryParams(httpExchange.getRequestURI().getRawQuery());
+    private static @Nullable BlockPos getBlockPosFromQueryString(HttpExchange httpExchange, Map<String, String> queryParams) throws IOException {
         if (!queryParams.containsKey("x") || !queryParams.containsKey("y") || !queryParams.containsKey("z")) {
             httpExchange.sendResponseHeaders(400, -1);
             httpExchange.getResponseBody().close();
@@ -242,6 +303,43 @@ public class CraftTTP implements ModInitializer {
         return new BlockPos(x, y, z);
     }
 
+    private static @Nullable ChunkPos getChunkPosFromQueryString(HttpExchange httpExchange, Map<String, String> queryParams) throws IOException {
+        if (!queryParams.containsKey("x") || !queryParams.containsKey("z")) {
+            httpExchange.sendResponseHeaders(400, -1);
+            httpExchange.getResponseBody().close();
+            return null;
+        }
+
+        int x, z;
+        try {
+            x = Integer.parseInt(queryParams.get("x"));
+            z = Integer.parseInt(queryParams.get("z"));
+        } catch (NumberFormatException e) {
+            httpExchange.sendResponseHeaders(400, -1);
+            httpExchange.getResponseBody().close();
+            return null;
+        }
+
+        return new ChunkPos(x, z);
+    }
+
+    private static @Nullable Integer getIntegerFromQueryString(HttpExchange httpExchange, Map<String, String> queryParams, String key, int defaultValue) throws IOException {
+        if (!queryParams.containsKey(key)) {
+            return defaultValue;
+        }
+
+        int value;
+        try {
+            value = Integer.parseInt(queryParams.get(key));
+        } catch (NumberFormatException e) {
+            httpExchange.sendResponseHeaders(400, -1);
+            httpExchange.getResponseBody().close();
+            return null;
+        }
+
+        return value;
+    }
+
     private static void respondOk(HttpExchange httpExchange, String response) throws IOException {
         httpExchange.sendResponseHeaders(200, response.length());
         try (var os = httpExchange.getResponseBody()) {
@@ -249,27 +347,33 @@ public class CraftTTP implements ModInitializer {
         }
     }
 
-    private static byte[] readChunk(ServerLevel level, ChunkPos chunkPos) {
+    private static byte[] readChunk(ServerLevel level, ChunkPos chunkPos, int offset, int length) {
         LevelChunk chunk = level.getChunk(chunkPos.x, chunkPos.z);
         int minY = level.getMinBuildHeight()+1;
         int maxY = level.getMaxBuildHeight();
         LevelChunkSection[] sections = chunk.getSections();
-        byte[] results = new byte[(maxY-minY)*16*4];
+        byte[] results = new byte[length];
         int i = 0;
         for (int y = minY; y < maxY; y++) {
-            LevelChunkSection section = sections[level.getSectionIndex(y)];
-            if (section == null) {
-                i += 16 * 4;
-                continue;
-            }
+            @Nullable LevelChunkSection section = sections[level.getSectionIndex(y)];
 
             for (int z = 0; z < 16; z += 4) {
                 for (int byteIndex = 0; byteIndex < 2; byteIndex++) {
+                    if (offset > 0) {
+                        offset--;
+                        continue;
+                    }
+                    if (i >= results.length) {
+                        return results;
+                    }
+
                     byte result = 0x0;
-                    for (int x = 0; x < 8; x++) {
-                        BlockState state = section.getBlockState(x + byteIndex * 8, y & 15, z);
-                        byte bit = (byte) (state.hasProperty(BlockStateProperties.LIT) ? state.getValue(BlockStateProperties.LIT) ? 1 : 0 : 0);
-                        result = (byte) (result | (bit << x));
+                    if (section != null) {
+                        for (int x = 0; x < 8; x++) {
+                            BlockState state = section.getBlockState(x + byteIndex * 8, y & 15, z);
+                            byte bit = (byte) (state.hasProperty(BlockStateProperties.LIT) ? state.getValue(BlockStateProperties.LIT) ? 1 : 0 : 0);
+                            result = (byte) (result | (bit << x));
+                        }
                     }
                     results[i++] = result;
                 }
