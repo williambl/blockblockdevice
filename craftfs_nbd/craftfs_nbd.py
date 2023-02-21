@@ -34,7 +34,7 @@ import base64
 # latest version at the time this example was written.
 API_VERSION = 2
 
-disk_length = 10000
+disk_length = 65536
 bytes_per_chunk = 3064
 
 
@@ -61,7 +61,7 @@ def get_size(h):
 def pread(h, buf, offset, flags):
     global disk_length
     data = get_relevant_data(len(buf), offset)
-    buf[:] = data
+    buf[:len(data)] = data
 
 
 def pwrite(h, buf, offset, flags):
@@ -76,33 +76,27 @@ def zero(h, count, offset, flags):
 
 def get_relevant_data(length, offset):
     global disk_length, bytes_per_chunk
-    chunk_offset = math.floor(offset / bytes_per_chunk)
-    within_chunk_offset = offset % bytes_per_chunk
-    length_of_first_chunk = (length % bytes_per_chunk) - within_chunk_offset
-    chunks_past_first_chunk_to_read = math.ceil((length - length_of_first_chunk) / bytes_per_chunk)
-    length_of_last_chunk = (length - length_of_first_chunk) % bytes_per_chunk
-    data = base64.b64decode(requests.get(
-        f"localhost:8394/read_chunk?x={chunk_offset}&z=0&length={length_of_first_chunk}&offset={within_chunk_offset}").text)
-    for i in range(0, chunks_past_first_chunk_to_read - 1):
-        data += base64.b64decode(requests.get(f"localhost:8394/read_chunk?x={i + chunk_offset}&z=0").text)
-    if length_of_last_chunk > 0:
-        data += base64.b64decode(requests.get(
-            f"localhost:8394/read_chunk?x={chunks_past_first_chunk_to_read + chunk_offset}&z=0&length={length_of_last_chunk}").text)
+    data = bytes()
+    while length > 0:
+        chunk_offset = math.floor(offset/bytes_per_chunk)
+        within_chunk_offset = offset % bytes_per_chunk
+        length_in_chunk = min(length, bytes_per_chunk - within_chunk_offset)
+        print(f"http://localhost:8394/read_chunk?x={chunk_offset}&z=0&length={length_in_chunk}&offset={within_chunk_offset}")
+        data += base64.b64decode(requests.get(f"http://localhost:8394/read_chunk?x={chunk_offset}&z=0&length={length_in_chunk}&offset={within_chunk_offset}").text)
+        length -= length_in_chunk
+        offset += length_in_chunk
     return data
 
 
 def write_data(length, offset, data):
     global disk_length, bytes_per_chunk
-    chunk_offset = math.floor(offset / bytes_per_chunk)
-    within_chunk_offset = offset % bytes_per_chunk
-    length_of_first_chunk = (length % bytes_per_chunk) - within_chunk_offset
-    chunks_past_first_chunk_to_read = math.ceil((length - length_of_first_chunk) / bytes_per_chunk)
-    length_of_last_chunk = (length - length_of_first_chunk) % bytes_per_chunk
-    requests.put(f"localhost:8394/write_chunk?x={chunk_offset}&z=0&length={length_of_first_chunk}&offset={within_chunk_offset}", data=base64.b64encode(data[:length_of_first_chunk]))
-    for i in range(0, chunks_past_first_chunk_to_read - 1):
-        requests.put(f"localhost:8394/write_chunk?x={i+chunk_offset}&z=0", data=base64.b64encode(data[(i*bytes_per_chunk):((i+1)*bytes_per_chunk)]))
-    if length_of_last_chunk > 0:
-        requests.put(f"localhost:8394/write_chunk?x={chunks_past_first_chunk_to_read+chunk_offset}&z=0", data=base64.b64encode(data[:-1]))
-
+    while length > 0:
+        chunk_offset = math.floor(offset/bytes_per_chunk)
+        within_chunk_offset = offset % bytes_per_chunk
+        length_in_chunk = min(length, bytes_per_chunk - within_chunk_offset)
+        print(f"http://localhost:8394/write_chunk?x={chunk_offset}&z=0&offset={within_chunk_offset}")
+        requests.put(f"http://localhost:8394/write_chunk?x={chunk_offset}&z=0&offset={within_chunk_offset}", data=base64.b64encode(data[len(data)-length:len(data)-length+length_in_chunk]))
+        length -= length_in_chunk
+        offset += length_in_chunk
     return data
 
