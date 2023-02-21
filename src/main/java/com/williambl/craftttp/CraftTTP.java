@@ -1,6 +1,8 @@
 package com.williambl.craftttp;
 
 import com.mojang.brigadier.Command;
+import com.mojang.brigadier.arguments.IntegerArgumentType;
+import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
@@ -17,14 +19,19 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.network.protocol.game.ClientboundLevelChunkPacketData;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.sounds.SoundEvents;
+import net.minecraft.sounds.SoundSource;
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.HorizontalDirectionalBlock;
+import net.minecraft.world.level.block.LeverBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.AttachFace;
 import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.chunk.LevelChunkSection;
+import net.minecraft.world.level.gameevent.GameEvent;
 import net.minecraft.world.level.levelgen.Heightmap;
 import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
@@ -105,61 +112,91 @@ public class CraftTTP implements ModInitializer {
             }
         });
 
-        CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> dispatcher.register(
-                literal("generate_memory").executes(ctx -> {
-                    ChunkPos chunkPos = new ChunkPos(new BlockPos(ctx.getSource().getPosition()));
-                    ServerLevel level = ctx.getSource().getLevel();
-                    LevelChunk chunk = level.getChunk(chunkPos.x, chunkPos.z);
-                    int minY = level.getMinBuildHeight();
-                    int maxY = level.getMaxBuildHeight();
-                    LevelChunkSection[] sections = chunk.getSections();
-                    int i = 0;
-                    for (int y = minY; y < maxY; y++) {
-                        LevelChunkSection section = sections[level.getSectionIndex(y)];
-                        if (section == null) {
-                            section = new LevelChunkSection(y, level.registryAccess().registryOrThrow(Registries.BIOME));
-                            sections[level.getSectionIndex(y)] = section;
-                        }
-                        if (y == minY) {
-                            for (int x = 0; x < 16; x++) for (int z = 0; z < 16; z++) {
-                                section.setBlockState(x, y & 15, z, Blocks.WHITE_WOOL.defaultBlockState());
+        CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
+            dispatcher.register(
+                    literal("generate_memory").executes(ctx -> {
+                        ChunkPos chunkPos = new ChunkPos(new BlockPos(ctx.getSource().getPosition()));
+                        ServerLevel level = ctx.getSource().getLevel();
+                        LevelChunk chunk = level.getChunk(chunkPos.x, chunkPos.z);
+                        int minY = level.getMinBuildHeight();
+                        int maxY = level.getMaxBuildHeight();
+                        LevelChunkSection[] sections = chunk.getSections();
+                        int i = 0;
+                        for (int y = minY; y < maxY; y++) {
+                            LevelChunkSection section = sections[level.getSectionIndex(y)];
+                            if (section == null) {
+                                section = new LevelChunkSection(y, level.registryAccess().registryOrThrow(Registries.BIOME));
+                                sections[level.getSectionIndex(y)] = section;
                             }
-                        } else {
-                            for (int z = 0; z < 16; z++) {
-                                BlockState state = switch (z % 4) {
-                                    case 0 -> Blocks.REDSTONE_WALL_TORCH.defaultBlockState().setValue(BlockStateProperties.HORIZONTAL_FACING, Direction.NORTH).setValue(BlockStateProperties.LIT, false);
-                                    case 1 -> Blocks.WHITE_WOOL.defaultBlockState();
-                                    case 2 -> Blocks.LEVER.defaultBlockState().setValue(BlockStateProperties.ATTACH_FACE, AttachFace.WALL).setValue(BlockStateProperties.HORIZONTAL_FACING, Direction.SOUTH).setValue(BlockStateProperties.POWERED, true);
-                                    case 3 -> Blocks.SCAFFOLDING.defaultBlockState().setValue(BlockStateProperties.STABILITY_DISTANCE, 0);
-                                    default -> throw new IllegalStateException("Unexpected value: " + z % 4);
-                                };
-                                if (state.getBlock() == Blocks.REDSTONE_WALL_TORCH) {
-                                    i++;
-                                }
-                                for (int x = 0; x < 16; x++) {
-                                    section.setBlockState(x, y & 15, z, state);
+                            if (y == minY) {
+                                for (int x = 0; x < 16; x++)
+                                    for (int z = 0; z < 16; z++) {
+                                        section.setBlockState(x, y & 15, z, Blocks.WHITE_WOOL.defaultBlockState());
+                                    }
+                            } else {
+                                for (int z = 0; z < 16; z++) {
+                                    BlockState state = switch (z % 4) {
+                                        case 0 -> Blocks.REDSTONE_WALL_TORCH.defaultBlockState().setValue(BlockStateProperties.HORIZONTAL_FACING, Direction.NORTH).setValue(BlockStateProperties.LIT, false);
+                                        case 1 -> Blocks.ORANGE_WOOL.defaultBlockState();
+                                        case 2 -> Blocks.LEVER.defaultBlockState().setValue(BlockStateProperties.ATTACH_FACE, AttachFace.WALL).setValue(BlockStateProperties.HORIZONTAL_FACING, Direction.SOUTH).setValue(BlockStateProperties.POWERED, true);
+                                        case 3 -> Blocks.SCAFFOLDING.defaultBlockState().setValue(BlockStateProperties.STABILITY_DISTANCE, 0);
+                                        default -> throw new IllegalStateException("Unexpected value: " + z % 4);
+                                    };
+
+                                    for (int x = 0; x < 16; x++) {
+                                        if (state.getBlock() == Blocks.REDSTONE_WALL_TORCH) {
+                                            i++;
+                                        }
+                                        if (state.getBlock() == Blocks.ORANGE_WOOL && x == 8) {
+                                            state = Blocks.MAGENTA_WOOL.defaultBlockState();
+                                        }
+                                        section.setBlockState(x, y & 15, z, state);
+                                    }
                                 }
                             }
                         }
-                    }
 
-                    for (var section : sections) for (int x = 0; x < 16; x++) for (int z = 0; z < 16; z++) {
-                        level.getChunkSource().getLightEngine().updateSectionStatus(chunkPos.getBlockAt(x, section.bottomBlockY(), z), false);
-                    }
+                        for (var section : sections)
+                            for (int x = 0; x < 16; x++)
+                                for (int z = 0; z < 16; z++) {
+                                    level.getChunkSource().getLightEngine().updateSectionStatus(chunkPos.getBlockAt(x, section.bottomBlockY(), z), false);
+                                }
 
-                    for (int x = 0; x < 16; x++) for (int z = 0; z < 16; z++) for (var type : Heightmap.Types.values()) {
-                        chunk.getOrCreateHeightmapUnprimed(type).update(x, maxY, z, chunk.getBlockState(chunkPos.getBlockAt(x, maxY, z)));
-                    }
+                        for (int x = 0; x < 16; x++)
+                            for (int z = 0; z < 16; z++)
+                                for (var type : Heightmap.Types.values()) {
+                                    chunk.getOrCreateHeightmapUnprimed(type).update(x, maxY, z, chunk.getBlockState(chunkPos.getBlockAt(x, maxY, z)));
+                                }
 
-                    chunk.clearAllBlockEntities();
-                    chunk.setUnsaved(true);
-                    level.getChunkSource().chunkMap.resendChunk(chunk);
+                        chunk.clearAllBlockEntities();
+                        chunk.setUnsaved(true);
+                        level.getChunkSource().chunkMap.resendChunk(chunk);
 
-                    ctx.getSource().sendSuccess(Component.literal("Created a block of %s bits (%s bytes) of memory.".formatted(i, i/8)), true);
+                        ctx.getSource().sendSuccess(Component.literal("Created a block of %s bits (%s bytes) of memory.".formatted(i, i / 8)), true);
 
-                    return Command.SINGLE_SUCCESS;
-                })
-        ));
+                        return Command.SINGLE_SUCCESS;
+                    })
+            );
+            dispatcher.register(
+                    literal("encode_chunk").then(argument("value", StringArgumentType.string()).then(argument("offset", IntegerArgumentType.integer(0)).executes(ctx -> {
+                        String value = StringArgumentType.getString(ctx, "value");
+                        int offset = IntegerArgumentType.getInteger(ctx, "offset");
+                        ChunkPos chunkPos = new ChunkPos(new BlockPos(ctx.getSource().getPosition()));
+                        writeChunk(ctx.getSource().getLevel(), chunkPos, offset, value.getBytes(StandardCharsets.UTF_8));
+                        ctx.getSource().sendSuccess(Component.literal("Written %s to %s @ an offset of %s bytes".formatted(value, chunkPos, offset)), false);
+                        return Command.SINGLE_SUCCESS;
+                    })))
+            );
+            dispatcher.register(
+                    literal("decode_chunk").then(argument("length", IntegerArgumentType.integer(1)).executes(ctx -> {
+                        int length = IntegerArgumentType.getInteger(ctx, "length");
+                        byte[] result = readChunk(ctx.getSource().getLevel(), new ChunkPos(new BlockPos(ctx.getSource().getPosition())));
+                        String resultString = new String(result, 0, length, StandardCharsets.UTF_8);
+                        ctx.getSource().sendSuccess(Component.literal(resultString), false);
+                        return Command.SINGLE_SUCCESS;
+                    }))
+            );
+        });
     }
 
     private static Map<String, String> getQueryParams(@Nullable String rawQueryString) {
@@ -209,6 +246,74 @@ public class CraftTTP implements ModInitializer {
         httpExchange.sendResponseHeaders(200, response.length());
         try (var os = httpExchange.getResponseBody()) {
             os.write(response.getBytes());
+        }
+    }
+
+    private static byte[] readChunk(ServerLevel level, ChunkPos chunkPos) {
+        LevelChunk chunk = level.getChunk(chunkPos.x, chunkPos.z);
+        int minY = level.getMinBuildHeight()+1;
+        int maxY = level.getMaxBuildHeight();
+        LevelChunkSection[] sections = chunk.getSections();
+        byte[] results = new byte[(maxY-minY)*16*4];
+        int i = 0;
+        for (int y = minY; y < maxY; y++) {
+            LevelChunkSection section = sections[level.getSectionIndex(y)];
+            if (section == null) {
+                i += 16 * 4;
+                continue;
+            }
+
+            for (int z = 0; z < 16; z += 4) {
+                for (int byteIndex = 0; byteIndex < 2; byteIndex++) {
+                    byte result = 0x0;
+                    for (int x = 0; x < 8; x++) {
+                        BlockState state = section.getBlockState(x + byteIndex * 8, y & 15, z);
+                        byte bit = (byte) (state.hasProperty(BlockStateProperties.LIT) ? state.getValue(BlockStateProperties.LIT) ? 1 : 0 : 0);
+                        result = (byte) (result | (bit << x));
+                    }
+                    results[i++] = result;
+                }
+            }
+        }
+
+        return results;
+    }
+
+    private static void writeChunk(ServerLevel level, ChunkPos chunkPos, int offset, byte[] toWrite) {
+        LevelChunk chunk = level.getChunk(chunkPos.x, chunkPos.z);
+        int minY = level.getMinBuildHeight()+1;
+        int maxY = level.getMaxBuildHeight();
+        LevelChunkSection[] sections = chunk.getSections();
+        int i = 0;
+        for (int y = minY; y < maxY; y++) {
+            @Nullable LevelChunkSection section = sections[level.getSectionIndex(y)];
+
+            for (int z = 2; z < 16; z += 4) {
+                for (int byteIndex = 0; byteIndex < 2; byteIndex++) {
+                    if (i >= toWrite.length) {
+                        return;
+                    }
+                    if (offset > 0) {
+                        offset--;
+                        continue;
+                    }
+                    byte byteToWrite = toWrite[i++];
+                    for (int x = 0; x < 8; x++) {
+                        BlockState state = section == null ? Blocks.AIR.defaultBlockState() : section.getBlockState(x + byteIndex * 8, y & 15, z);
+                        if (state.hasProperty(BlockStateProperties.POWERED) && state.hasProperty(BlockStateProperties.ATTACH_FACE)) {
+                            boolean isBitOn = ((byteToWrite >> x) & 1) != 0;
+                            // we don't set it straight to the section because we want block updates from redstone + clicky sounds :)
+                            if (isBitOn == state.getValue(BlockStateProperties.POWERED)) {
+                                var pos = new BlockPos(chunkPos.getMinBlockX() + x + byteIndex * 8, y, chunkPos.getMinBlockZ() + z);
+                                var result = ((LeverBlock)Blocks.LEVER).pull(state, level, pos);
+                                float f = result.getValue(BlockStateProperties.POWERED) ? 0.6F : 0.5F;
+                                level.playSound(null, pos, SoundEvents.LEVER_CLICK, SoundSource.BLOCKS, 0.3F, f);
+                                level.gameEvent(null, result.getValue(BlockStateProperties.POWERED) ? GameEvent.BLOCK_ACTIVATE : GameEvent.BLOCK_DEACTIVATE, pos);
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
