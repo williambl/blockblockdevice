@@ -62,12 +62,14 @@ public class CraftTTP implements ModInitializer {
                 var httpServer = HttpServer.create(new InetSocketAddress(8394), 0);
                 httpServer.createContext("/get_block", httpExchange -> {
                     if (!verifyHttpMethod(httpExchange, "GET")) {
+                        LOGGER.warn("Rejecting {} because incorrect method {}", httpExchange.getRequestURI(), httpExchange.getRequestMethod());
                         return;
                     }
 
                     Map<String, String> queryParams = getQueryParams(httpExchange.getRequestURI().getRawQuery());
                     @Nullable BlockPos pos = getBlockPosFromQueryString(httpExchange, queryParams);
                     if (pos == null) {
+                        LOGGER.warn("Rejecting {} because no blockpos", httpExchange.getRequestURI());
                         return;
                     }
 
@@ -76,12 +78,14 @@ public class CraftTTP implements ModInitializer {
                 });
                 httpServer.createContext("/set_block", httpExchange -> {
                     if (!verifyHttpMethod(httpExchange, "PUT")) {
+                        LOGGER.warn("Rejecting {} because incorrect method {}", httpExchange.getRequestURI(), httpExchange.getRequestMethod());
                         return;
                     }
 
                     Map<String, String> queryParams = getQueryParams(httpExchange.getRequestURI().getRawQuery());
                     @Nullable BlockPos pos = getBlockPosFromQueryString(httpExchange, queryParams);
                     if (pos == null) {
+                        LOGGER.warn("Rejecting {} because no blockpos", httpExchange.getRequestURI());
                         return;
                     }
 
@@ -92,6 +96,7 @@ public class CraftTTP implements ModInitializer {
                     } catch (CommandSyntaxException e) {
                         httpExchange.sendResponseHeaders(400, -1);
                         httpExchange.getResponseBody().close();
+                        LOGGER.warn("Rejecting {} because incorrect blockstate", httpExchange.getRequestURI());
                         return;
                     }
 
@@ -100,45 +105,59 @@ public class CraftTTP implements ModInitializer {
                 });
                 httpServer.createContext("/read_chunk", httpExchange -> {
                     if (!verifyHttpMethod(httpExchange, "GET")) {
+                        LOGGER.warn("Rejecting {} because incorrect method {}", httpExchange.getRequestURI(), httpExchange.getRequestMethod());
                         return;
                     }
 
                     Map<String, String> queryParams = getQueryParams(httpExchange.getRequestURI().getRawQuery());
                     @Nullable ChunkPos pos = getChunkPosFromQueryString(httpExchange, queryParams);
                     if (pos == null) {
+                        LOGGER.warn("Rejecting {} because no chunkpos", httpExchange.getRequestURI());
                         return;
                     }
 
                     @Nullable Integer offset = getIntegerFromQueryString(httpExchange, queryParams, "offset", 0);
                     if (offset == null) {
+                        LOGGER.warn("Rejecting {} because invalid offset", httpExchange.getRequestURI());
                         return;
                     }
 
                     int maxLengthForChunk = server.submit(() -> server.overworld().getMaxBuildHeight() - server.overworld().getMinBuildHeight() - 1).join() * 8;
                     @Nullable Integer length = getIntegerFromQueryString(httpExchange, queryParams, "length", maxLengthForChunk-offset);
                     if (length == null) {
+                        LOGGER.warn("Rejecting {} because invalid length", httpExchange.getRequestURI());
                         return;
                     }
                     if (length > maxLengthForChunk) {
+                        LOGGER.warn("Rejecting {} because more content ({}) than can fit in a chunk {}", httpExchange.getRequestURI(), length, maxLengthForChunk);
+                        httpExchange.sendResponseHeaders(400, -1);
+                        httpExchange.getResponseBody().close();
+                    }
+                    if (length < 0) {
+                        LOGGER.warn("Rejecting {} because negative length ({})", httpExchange.getRequestURI(), length);
                         httpExchange.sendResponseHeaders(400, -1);
                         httpExchange.getResponseBody().close();
                     }
 
+                    LOGGER.info("Request to read {} bytes of data @ {} offset {}", length, pos, offset);
                     byte[] chunkContents = server.submit(() -> readChunk(server.overworld(), pos, offset, length)).join();
                     respondOk(httpExchange, Base64.getEncoder().encodeToString(chunkContents));
                 });
                 httpServer.createContext("/write_chunk", httpExchange -> {
                     if (!verifyHttpMethod(httpExchange, "PUT")) {
+                        LOGGER.warn("Rejecting {} because incorrect method {}", httpExchange.getRequestURI(), httpExchange.getRequestMethod());
                         return;
                     }
 
                     Map<String, String> queryParams = getQueryParams(httpExchange.getRequestURI().getRawQuery());
                     @Nullable ChunkPos pos = getChunkPosFromQueryString(httpExchange, queryParams);
                     if (pos == null) {
+                        LOGGER.warn("Rejecting {} because no chunkpos", httpExchange.getRequestURI());
                         return;
                     }
                     @Nullable Integer offset = getIntegerFromQueryString(httpExchange, queryParams, "offset", 0);
                     if (offset == null) {
+                        LOGGER.warn("Rejecting {} because invalid offset", httpExchange.getRequestURI());
                         return;
                     }
 
@@ -153,6 +172,7 @@ public class CraftTTP implements ModInitializer {
                         contents = Base64.getDecoder().decode(contentsStr);
                     }
 
+                    LOGGER.info("Request to write {} bytes of data @ {} offset {}", contents.length, pos, offset);
                     server.execute(() -> writeChunk(server.overworld(), pos, offset, contents));
                     respondOk(httpExchange, "Complete");
                 });
