@@ -81,8 +81,8 @@ def get_relevant_data(length, offset):
         chunk_offset = math.floor(offset/bytes_per_chunk)
         within_chunk_offset = offset % bytes_per_chunk
         length_in_chunk = min(length, bytes_per_chunk - within_chunk_offset)
-        print(f"http://localhost:8394/read_chunk?x={chunk_offset}&z=0&length={length_in_chunk}&offset={within_chunk_offset}")
-        data += base64.b64decode(requests.get(f"http://localhost:8394/read_chunk?x={chunk_offset}&z=0&length={length_in_chunk}&offset={within_chunk_offset}").text)
+        (chunk_x, chunk_z) = get_chunk_coords_for_index(chunk_offset)
+        data += base64.b64decode(requests.get(f"http://localhost:8394/read_chunk?x={chunk_x}&z={chunk_z}&length={length_in_chunk}&offset={within_chunk_offset}").text)
         length -= length_in_chunk
         offset += length_in_chunk
     return data
@@ -94,9 +94,11 @@ def write_data(length, offset, data):
         chunk_offset = math.floor(offset/bytes_per_chunk)
         within_chunk_offset = offset % bytes_per_chunk
         length_in_chunk = min(length, bytes_per_chunk - within_chunk_offset)
-        print(f"http://localhost:8394/write_chunk?x={chunk_offset}&z=0&offset={within_chunk_offset}")
-        requests.put(f"http://localhost:8394/write_chunk?x={chunk_offset}&z=0&offset={within_chunk_offset}", data=base64.b64encode(data[len(data)-length:len(data)-length+length_in_chunk]))
+        (chunk_x, chunk_z) = get_chunk_coords_for_index(chunk_offset)
+        requests.put(f"http://localhost:8394/write_chunk?x={chunk_x}&z={chunk_z}&offset={within_chunk_offset}", data=base64.b64encode(data[len(data)-length:len(data)-length+length_in_chunk]))
         length -= length_in_chunk
         offset += length_in_chunk
     return data
 
+def get_chunk_coords_for_index(chunk_index):
+    return (chunk_index % 10, math.floor(chunk_index/10))
