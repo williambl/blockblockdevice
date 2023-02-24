@@ -7,7 +7,7 @@
   "authors": [],
   "contact": {},
   "license": "MIT",
-  "icon": "assets/craftfs/icon.png",
+  "icon": "assets/craftttp/icon.png",
   "environment": "*",
   "entrypoints": {
     "main": [
